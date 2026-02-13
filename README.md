@@ -10,10 +10,10 @@ pip install -e .
 
 ## Quick start
 - Parquet:  
-  `python -m token_counter.cli --input data/ptwiki_articles1.parquet --format parquet`
+  `python -m token_counter.cli --input data/your_file_dataset.parquet --format parquet`
 
 - JSONL (limit to first 500 rows):  
-  `python -m token_counter.cli --input data/ptwiki_articles1.jsonl --format jsonl --max-docs 500`
+  `python -m token_counter.cli --input data/your_file_dataset.jsonl --format jsonl --max-docs 500`
 
 - Hugging Face sharded Parquet (all matching files):  
   `python -m token_counter.cli --input "hf://datasets/g4me/corpus-carolina-v2@main/data/corpus/part-*.parquet" --format parquet`
