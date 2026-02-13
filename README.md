@@ -15,10 +15,25 @@ pip install -e .
 - JSONL (limit to first 500 rows):  
   `python -m token_counter.cli --input data/ptwiki_articles1.jsonl --format jsonl --max-docs 500`
 
+- Hugging Face sharded Parquet (all matching files):  
+  `python -m token_counter.cli --input "hf://datasets/g4me/corpus-carolina-v2@main/data/corpus/part-*.parquet" --format parquet`
+
 The console script alias is also available after installation: `token-counter --input ...`
 
+## Hugging Face datasets
+You can stream files directly from the Hub by passing a remote path or glob pattern to `--input`.
+
+- Public dataset shards (glob):  
+  `python -m token_counter.cli --input "hf://datasets/<org>/<dataset>@main/<folder>/part-*.parquet" --format parquet`
+
+- Private dataset shards (PowerShell):  
+  `$env:HF_TOKEN="hf_xxx"`  
+  `python -m token_counter.cli --input "hf://datasets/<org>/<dataset>@main/<folder>/part-*.parquet" --format parquet`
+
+If the text field is not named `text`, pass `--field <column_name>`.
+
 ## Flags
-- `--input` (default `data/ptwiki_articles1.parquet`): dataset path or URL.
+- `--input` (required): dataset path, URL, or glob pattern.
 - `--format` (`jsonl` | `parquet`, default `parquet`): dataset format.
 - `--model` (default `Qwen/Qwen3-1.7B-Base`): tokenizer to load via `transformers.AutoTokenizer`.
 - `--field` (default `text`): record field containing the text to tokenize.
@@ -39,4 +54,4 @@ A Markdown file is generated with summary and performance metrics:
 
 ## Notes
 - Uses streaming `datasets.load_dataset(..., streaming=True)` to avoid loading full datasets into memory.
-- Parquet and JSONL files can be local or remote URLs.
+- Parquet and JSONL files can be local files, remote URLs, or remote glob patterns.

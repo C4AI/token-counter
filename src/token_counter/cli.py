@@ -21,7 +21,6 @@ from transformers import AutoTokenizer
 
 # Defaults to mirror the original script behavior.
 DEFAULT_MODEL = "Qwen/Qwen3-1.7B-Base"
-DEFAULT_INPUT = "data/ptwiki_articles1.parquet"
 DEFAULT_FORMAT = "parquet"
 DEFAULT_FIELD = "text"
 DEFAULT_REPORT_PATH = "reports/token_count_report.md"
@@ -54,8 +53,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--input",
-        default=DEFAULT_INPUT,
-        help=f"Input dataset path (local file or remote URL). Default: {DEFAULT_INPUT}",
+        required=True,
+        help="Input dataset path (local file or remote URL).",
     )
     parser.add_argument(
         "--format",
