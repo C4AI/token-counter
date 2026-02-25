@@ -166,6 +166,7 @@ cython_debug/
 
 # Token Counter outputs
 reports/
+scripts/find_min_docs.py
 
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
@@ -186,3 +187,4 @@ reports/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+data/one_token_docs.txt

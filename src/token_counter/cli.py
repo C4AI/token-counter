@@ -47,6 +47,16 @@ class TokenCountStats:
         return self.documents / self.wall_time if self.wall_time > 0 else 0.0
 
 
+def _format_spreadsheet_number(value: float) -> str:
+    """
+    Format numeric values for spreadsheet copy/paste with dot-thousands and comma-decimals.
+    Example: 41691152 -> "41.691.152,00"
+    """
+    formatted = f"{value:,.2f}"
+    formatted = formatted.replace(",", "_").replace(".", ",").replace("_", ".")
+    return formatted
+
+
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Count tokenizer tokens in JSONL or Parquet datasets."
@@ -170,17 +180,17 @@ def _write_report(args: argparse.Namespace, stats: TokenCountStats) -> Optional[
         "",
         "| Metric | Value |",
         "| --- | --- |",
-        f"| Documents processed | {stats.documents:,} |",
-        f"| Total tokens | {stats.total_tokens:,} |",
-        f"| Avg tokens / doc | {stats.average_tokens:,.2f} |",
-        f"| Min tokens / doc | {stats.min_tokens if stats.min_tokens is not None else 'n/a'} |",
-        f"| Max tokens / doc | {stats.max_tokens if stats.max_tokens is not None else 'n/a'} |",
+        f"| Documents processed | {_format_spreadsheet_number(stats.documents)} |",
+        f"| Total tokens | {_format_spreadsheet_number(stats.total_tokens)} |",
+        f"| Avg tokens / doc | {_format_spreadsheet_number(stats.average_tokens)} |",
+        f"| Min tokens / doc | {_format_spreadsheet_number(stats.min_tokens) if stats.min_tokens is not None else 'n/a'} |",
+        f"| Max tokens / doc | {_format_spreadsheet_number(stats.max_tokens) if stats.max_tokens is not None else 'n/a'} |",
         "",
         "## Performance",
         "",
-        f"- Wall time (s): {stats.wall_time:.2f}",
-        f"- Tokens per second: {stats.tokens_per_second:,.2f}",
-        f"- Docs per second: {stats.docs_per_second:,.2f}",
+        f"- Wall time (s): {_format_spreadsheet_number(stats.wall_time)}",
+        f"- Tokens per second: {_format_spreadsheet_number(stats.tokens_per_second)}",
+        f"- Docs per second: {_format_spreadsheet_number(stats.docs_per_second)}",
     ]
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
