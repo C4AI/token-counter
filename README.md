@@ -1,6 +1,6 @@
 # Token Counter
 
-CLI to stream JSONL or Parquet datasets, count tokenizer tokens with a base model tokenizer (default: `Qwen/Qwen3-1.7B-Base`), and write a Markdown summary report.
+CLI to stream JSONL or Parquet datasets, count tokenizer tokens with a base model tokenizer (default: `Qwen/Qwen3-1.7B-Base`), and write a distribution-focused Markdown report with optional JSON output.
 
 ## Installation
 ```
@@ -41,11 +41,21 @@ If the text field is not named `text`, pass `--field <column_name>`.
 - `--max-docs` (int, optional): stop after N documents.
 - `--trust-remote-code` (flag): allow custom tokenizer code from the model repo.
 - `--report` (default `reports/token_count_report.md`): Markdown report path. Use empty string to skip.
+- `--report-json` (optional): structured JSON report path. Disabled by default.
 
 ## Report
-A Markdown file is generated with summary and performance metrics:
-- Documents processed, total tokens, min/avg/max tokens per document.
-- Wall-clock time, tokens per second, documents per second.
+The CLI builds one canonical report payload and can render it to Markdown and JSON.
+
+Markdown sections:
+- Run context with tokenizer settings, timestamps, report paths, and package versions.
+- Distribution snapshot with documents processed, mean, median, IQR, P95, and P99.
+- Distribution histogram rendered as a single ASCII bar chart in Markdown with fixed token buckets.
+- Data quality with skipped/null/empty/coerced row counts.
+- Performance with wall-clock time and throughput metrics.
+
+JSON report:
+- Includes `schema_version`, `status`, `run_metadata`, `summary_stats`, `distribution_stats`, `data_quality_stats`, and `performance_stats`.
+- Keeps richer distribution details such as percentiles, IQR, histogram buckets, min/max, and standard deviation for programmatic comparison.
 
 ## Entrypoints
 - Module: `python -m token_counter.cli ...`
