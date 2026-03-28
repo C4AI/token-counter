@@ -36,7 +36,6 @@ DEFAULT_FORMAT = "parquet"
 DEFAULT_FIELD = "text"
 DEFAULT_REPORT_PATH = "reports/token_count_report.md"
 SCHEMA_VERSION = 1
-HISTOGRAM_BAR_WIDTH = 20
 
 HISTOGRAM_BUCKETS = (
     ("0-32", 0, 32),
@@ -106,12 +105,8 @@ def _compute_iqr(percentiles: dict[str, Optional[float]]) -> Optional[float]:
     return float(p75 - p25)
 
 
-def _render_histogram_bar(share_percent: float, width: int = HISTOGRAM_BAR_WIDTH) -> str:
-    if share_percent <= 0:
-        filled = 0
-    else:
-        filled = max(1, min(width, int(round((share_percent / 100.0) * width))))
-    return ("#" * filled) + ("." * (width - filled))
+def _distribution_plot_relative_path(report_path: Path) -> str:
+    return f"{report_path.stem}_distribution.png"
 
 
 class P2QuantileEstimator:
@@ -451,6 +446,10 @@ def build_report_payload(
 ) -> dict[str, Any]:
     percentiles = stats.quantiles
     iqr = _compute_iqr(percentiles)
+    plot_relative_path = None
+    if getattr(args, "report", ""):
+        plot_relative_path = _distribution_plot_relative_path(Path(args.report))
+
     return {
         "schema_version": SCHEMA_VERSION,
         "status": status,
@@ -493,6 +492,12 @@ def build_report_payload(
             "max_tokens_per_doc": stats.max_tokens,
             "token_stddev": stats.token_stddev,
             "percentiles": percentiles,
+            "plot": {
+                "relative_path": plot_relative_path,
+                "format": "png",
+            }
+            if plot_relative_path
+            else None,
             "histogram": [
                 {
                     "label": label,
@@ -530,6 +535,7 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
     distribution_stats = payload["distribution_stats"]
     data_quality_stats = payload["data_quality_stats"]
     performance_stats = payload["performance_stats"]
+    plot_info = distribution_stats.get("plot") or {}
 
     lines = [
         "# Token Count Report",
@@ -571,13 +577,26 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
         "",
         "## Distribution Histogram",
         "",
-        "| Token Range | Docs | Share | Bar |",
-        "| --- | --- | --- | --- |",
     ]
+
+    if plot_info.get("relative_path"):
+        lines.extend(
+            [
+                f"![Distribution histogram]({plot_info['relative_path']})",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "| Token Range | Docs | Share |",
+            "| --- | --- | --- |",
+        ]
+    )
 
     for bucket in distribution_stats["histogram"]:
         lines.append(
-            f"| {bucket['label']} | {_format_integer(bucket['documents'])} | {_format_decimal(bucket['share_percent'])}% | {_render_histogram_bar(bucket['share_percent'])} |"
+            f"| {bucket['label']} | {_format_integer(bucket['documents'])} | {_format_decimal(bucket['share_percent'])}% |"
         )
 
     lines.extend(
@@ -606,6 +625,68 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
     )
 
     return "\n".join(lines)
+
+
+def _write_distribution_plot(path: Path, payload: dict[str, Any]) -> Path:
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "matplotlib is required to generate the distribution plot. "
+            "Install project dependencies and rerun the command."
+        ) from exc
+
+    histogram = payload["distribution_stats"]["histogram"]
+    labels = [bucket["label"] for bucket in histogram]
+    shares = [bucket["share_percent"] for bucket in histogram]
+    documents = [bucket["documents"] for bucket in histogram]
+
+    figure_height = max(4.0, 0.6 * len(labels) + 1.5)
+    figure, axis = plt.subplots(figsize=(10, figure_height))
+    bars = axis.barh(labels, shares, color="#2F6B8A")
+
+    max_share = max(shares, default=0.0)
+    axis.set_xlim(0, max(100.0, max_share * 1.1 if max_share > 0 else 1.0))
+    axis.set_xlabel("Share of documents (%)")
+    axis.set_title("Token length distribution")
+    axis.grid(axis="x", linestyle="--", alpha=0.3)
+    axis.invert_yaxis()
+
+    x_limit = axis.get_xlim()[1]
+    annotation_offset = x_limit * 0.01
+    for bar, share, docs in zip(bars, shares, documents):
+        text_x = min(bar.get_width() + annotation_offset, x_limit * 0.98)
+        axis.text(
+            text_x,
+            bar.get_y() + bar.get_height() / 2,
+            f"{share:.2f}% ({docs:,})",
+            va="center",
+            ha="left",
+            fontsize=9,
+        )
+
+    figure.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        delete=False,
+        dir=path.parent,
+        prefix=f"{path.stem}_",
+        suffix=path.suffix,
+    ) as handle:
+        temp_path = Path(handle.name)
+
+    try:
+        figure.savefig(temp_path, dpi=160, bbox_inches="tight", format="png")
+        temp_path.replace(path)
+    finally:
+        plt.close(figure)
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+    return path
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -639,23 +720,30 @@ def write_json_report(path: Path, payload: dict[str, Any]) -> Path:
 def _write_outputs(
     args: argparse.Namespace,
     payload: dict[str, Any],
-) -> tuple[Optional[Path], Optional[Path]]:
+) -> tuple[Optional[Path], Optional[Path], Optional[Path]]:
     markdown_path = None
     json_path = None
+    plot_path = None
 
     if getattr(args, "report", ""):
-        markdown_path = write_markdown_report(Path(args.report), payload)
+        markdown_path = Path(args.report)
+        plot_info = payload["distribution_stats"].get("plot") or {}
+        if plot_info.get("relative_path"):
+            plot_path = markdown_path.parent / plot_info["relative_path"]
+            _write_distribution_plot(plot_path, payload)
+        markdown_path = write_markdown_report(markdown_path, payload)
     if getattr(args, "report_json", ""):
         json_path = write_json_report(Path(args.report_json), payload)
 
-    return markdown_path, json_path
+    return markdown_path, json_path, plot_path
 
 
 def _write_report(args: argparse.Namespace, stats: TokenCountStats) -> Optional[Path]:
     payload = build_report_payload(args, stats)
     if not getattr(args, "report", ""):
         return None
-    return write_markdown_report(Path(args.report), payload)
+    markdown_path, _, _ = _write_outputs(args, payload)
+    return markdown_path
 
 
 def _render_console_summary(payload: dict[str, Any]) -> list[str]:
@@ -699,12 +787,14 @@ def main(argv: Optional[list[str]] = None) -> None:
     )
 
     payload = build_report_payload(args, stats)
-    markdown_path, json_path = _write_outputs(args, payload)
+    markdown_path, json_path, plot_path = _write_outputs(args, payload)
 
     for line in _render_console_summary(payload):
         print(line)
     if markdown_path:
         print(f"Report written to: {markdown_path}")
+    if plot_path:
+        print(f"Distribution plot written to: {plot_path}")
     if json_path:
         print(f"JSON report written to: {json_path}")
 

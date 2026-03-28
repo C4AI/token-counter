@@ -140,9 +140,11 @@ class TokenCounterReportTests(unittest.TestCase):
         self.assertIn("| IQR tokens / doc | 2,00 |", markdown)
         self.assertIn("| P95 tokens / doc | 80,80 |", markdown)
         self.assertIn("| P99 tokens / doc | 96,16 |", markdown)
-        self.assertIn("| Token Range | Docs | Share | Bar |", markdown)
-        self.assertIn("| 0-32 | 4 | 80,00% | ################.... |", markdown)
-        self.assertIn("| 65-128 | 1 | 20,00% | ####................ |", markdown)
+        self.assertIn("![Distribution histogram](out_distribution.png)", markdown)
+        self.assertIn("| Token Range | Docs | Share |", markdown)
+        self.assertIn("| 0-32 | 4 | 80,00% |", markdown)
+        self.assertIn("| 65-128 | 1 | 20,00% |", markdown)
+        self.assertNotIn("| Bar |", markdown)
         self.assertNotIn("100,00", markdown)
 
     def test_write_json_report_persists_complete_distribution_shape(self) -> None:
@@ -176,6 +178,7 @@ class TokenCounterReportTests(unittest.TestCase):
         self.assertIn("p25", distribution["percentiles"])
         self.assertIn("p75", distribution["percentiles"])
         self.assertIn("iqr_tokens_per_doc", distribution)
+        self.assertEqual(distribution["plot"]["relative_path"], "out_distribution.png")
 
     @patch("token_counter.cli.tqdm", DummyProgress)
     def test_main_supports_json_output_max_docs_and_special_tokens(self) -> None:
@@ -188,6 +191,7 @@ class TokenCounterReportTests(unittest.TestCase):
                 patch("token_counter.cli.AutoTokenizer.from_pretrained", return_value=FakeTokenizer()),
                 patch("token_counter.cli._load_stream", return_value=iter([None, "a", "aa", "aaa"])),
                 patch("token_counter.cli._now_local", return_value=datetime.fromisoformat("2026-03-28T11:00:00-03:00")),
+                patch("token_counter.cli._write_distribution_plot") as plot_writer,
                 redirect_stdout(stdout),
             ):
                 cli.main(
@@ -207,6 +211,7 @@ class TokenCounterReportTests(unittest.TestCase):
             written_payload = json.loads(json_path.read_text(encoding="utf-8"))
             output = stdout.getvalue()
             self.assertFalse(markdown_path.exists())
+            plot_writer.assert_not_called()
 
         distribution = written_payload["distribution_stats"]
         self.assertEqual(written_payload["summary_stats"]["rows_seen"], 3)
@@ -221,10 +226,31 @@ class TokenCounterReportTests(unittest.TestCase):
         self.assertIn("JSON report written to:", output)
         self.assertNotIn("Report written to:", output)
 
-    def test_histogram_bar_helper_is_fixed_width(self) -> None:
-        self.assertEqual(cli._render_histogram_bar(0.0), "." * 20)
-        self.assertEqual(cli._render_histogram_bar(20.0), "####................")
-        self.assertEqual(cli._render_histogram_bar(100.0), "#" * 20)
+    def test_write_outputs_generates_plot_for_markdown_report(self) -> None:
+        payload = cli.build_report_payload(
+            make_args(report="reports/out.md", report_json="reports/out.json"),
+            make_stats_from_lengths([1, 2, 3], rows_seen=3),
+        )
+
+        with TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "out.md"
+            json_path = Path(temp_dir) / "out.json"
+            args = make_args(report=str(report_path), report_json=str(json_path))
+            payload["distribution_stats"]["plot"]["relative_path"] = "out_distribution.png"
+
+            with (
+                patch("token_counter.cli.write_markdown_report", return_value=report_path) as markdown_writer,
+                patch("token_counter.cli.write_json_report", return_value=json_path) as json_writer,
+                patch("token_counter.cli._write_distribution_plot") as plot_writer,
+            ):
+                written_markdown, written_json, written_plot = cli._write_outputs(args, payload)
+
+            self.assertEqual(written_markdown, report_path)
+            self.assertEqual(written_json, json_path)
+            self.assertEqual(written_plot, report_path.parent / "out_distribution.png")
+            plot_writer.assert_called_once_with(report_path.parent / "out_distribution.png", payload)
+            markdown_writer.assert_called_once()
+            json_writer.assert_called_once()
 
 
 if __name__ == "__main__":

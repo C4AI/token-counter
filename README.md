@@ -49,7 +49,7 @@ The CLI builds one canonical report payload and can render it to Markdown and JS
 Markdown sections:
 - Run context with tokenizer settings, timestamps, report paths, and package versions.
 - Distribution snapshot with documents processed, mean, median, IQR, P95, and P99.
-- Distribution histogram rendered as a single ASCII bar chart in Markdown with fixed token buckets.
+- Distribution histogram rendered as a single PNG chart embedded in Markdown with fixed token buckets.
 - Data quality with skipped/null/empty/coerced row counts.
 - Performance with wall-clock time and throughput metrics.
 
