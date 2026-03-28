@@ -8,6 +8,11 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+For PDF export support only, you can install the optional extra:
+```
+pip install -e ".[pdf]"
+```
+
 ## Quick start
 - Parquet:  
   `python -m token_counter.cli --input data/your_file_dataset.parquet --format parquet`
@@ -42,6 +47,7 @@ If the text field is not named `text`, pass `--field <column_name>`.
 - `--trust-remote-code` (flag): allow custom tokenizer code from the model repo.
 - `--report` (default `reports/token_count_report.md`): Markdown report path. Use empty string to skip.
 - `--report-json` (optional): structured JSON report path. Disabled by default.
+- `--report-pdf` (flag): generate a PDF next to the Markdown report using the same base filename.
 
 ## Report
 The CLI builds one canonical report payload and can render it to Markdown and JSON.
@@ -56,6 +62,32 @@ Markdown sections:
 JSON report:
 - Includes `schema_version`, `status`, `run_metadata`, `summary_stats`, `distribution_stats`, `data_quality_stats`, and `performance_stats`.
 - Keeps richer distribution details such as percentiles, IQR, histogram buckets, min/max, and standard deviation for programmatic comparison.
+
+## PDF export
+You can convert a generated Markdown report to PDF with the cross-platform Python exporter. It renders the Markdown to HTML and writes the PDF directly from Python, preserving tables and the distribution plot image.
+
+During counting, you can ask the CLI to emit the PDF automatically from the Markdown report path:
+
+```bash
+python -m token_counter.cli --input data/your_file_dataset.parquet --format parquet --report reports/token_count_report.md --report-pdf
+```
+
+That generates `reports/token_count_report.pdf` automatically.
+
+```bash
+python -m token_counter.pdf_export --input reports/gutenberg_distribution_report.md
+```
+
+To choose the output file explicitly:
+
+```bash
+python -m token_counter.pdf_export --input reports/gutenberg_distribution_report.md --output reports/gutenberg_distribution_report.pdf
+```
+
+The package also exposes:
+- Module: `python -m token_counter.pdf_export ...`
+- Console script: `token-counter-report-pdf --input ...`
+- Wrapper script: `python scripts/export_report_pdf.py --input ...`
 
 ## Entrypoints
 - Module: `python -m token_counter.cli ...`

@@ -29,6 +29,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from token_counter import __version__
+from token_counter.pdf_export import export_markdown_report_to_pdf
 
 # Defaults to mirror the original script behavior.
 DEFAULT_MODEL = "Qwen/Qwen3-1.7B-Base"
@@ -107,6 +108,10 @@ def _compute_iqr(percentiles: dict[str, Optional[float]]) -> Optional[float]:
 
 def _distribution_plot_relative_path(report_path: Path) -> str:
     return f"{report_path.stem}_distribution.png"
+
+
+def _pdf_report_path(report_path: Path) -> Path:
+    return report_path.with_suffix(".pdf")
 
 
 class P2QuantileEstimator:
@@ -372,6 +377,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default="",
         help="Path for JSON report. Disabled by default.",
     )
+    parser.add_argument(
+        "--report-pdf",
+        action="store_true",
+        help="Generate a PDF report next to the Markdown report, reusing the same base filename.",
+    )
     return parser.parse_args(argv)
 
 
@@ -449,6 +459,9 @@ def build_report_payload(
     plot_relative_path = None
     if getattr(args, "report", ""):
         plot_relative_path = _distribution_plot_relative_path(Path(args.report))
+    report_pdf_path = None
+    if getattr(args, "report_pdf", False) and getattr(args, "report", ""):
+        report_pdf_path = str(_pdf_report_path(Path(args.report)))
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -466,6 +479,7 @@ def build_report_payload(
             "trust_remote_code": bool(args.trust_remote_code),
             "report_path": getattr(args, "report", "") or None,
             "report_json_path": getattr(args, "report_json", "") or None,
+            "report_pdf_path": report_pdf_path,
             "package_versions": {
                 "token_counter": __version__,
                 "datasets": datasets.__version__,
@@ -559,6 +573,7 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
         f"| Trust remote code | {bool(run_metadata['trust_remote_code'])} |",
         f"| Markdown report path | {run_metadata['report_path'] or 'n/a'} |",
         f"| JSON report path | {run_metadata['report_json_path'] or 'n/a'} |",
+        f"| PDF report path | {run_metadata['report_pdf_path'] or 'n/a'} |",
         f"| token_counter version | {run_metadata['package_versions']['token_counter']} |",
         f"| datasets version | {run_metadata['package_versions']['datasets']} |",
         f"| transformers version | {run_metadata['package_versions']['transformers']} |",
@@ -720,10 +735,11 @@ def write_json_report(path: Path, payload: dict[str, Any]) -> Path:
 def _write_outputs(
     args: argparse.Namespace,
     payload: dict[str, Any],
-) -> tuple[Optional[Path], Optional[Path], Optional[Path]]:
+) -> tuple[Optional[Path], Optional[Path], Optional[Path], Optional[Path]]:
     markdown_path = None
     json_path = None
     plot_path = None
+    pdf_path = None
 
     if getattr(args, "report", ""):
         markdown_path = Path(args.report)
@@ -732,17 +748,19 @@ def _write_outputs(
             plot_path = markdown_path.parent / plot_info["relative_path"]
             _write_distribution_plot(plot_path, payload)
         markdown_path = write_markdown_report(markdown_path, payload)
+        if getattr(args, "report_pdf", False):
+            pdf_path = export_markdown_report_to_pdf(markdown_path, _pdf_report_path(markdown_path))
     if getattr(args, "report_json", ""):
         json_path = write_json_report(Path(args.report_json), payload)
 
-    return markdown_path, json_path, plot_path
+    return markdown_path, json_path, plot_path, pdf_path
 
 
 def _write_report(args: argparse.Namespace, stats: TokenCountStats) -> Optional[Path]:
     payload = build_report_payload(args, stats)
     if not getattr(args, "report", ""):
         return None
-    markdown_path, _, _ = _write_outputs(args, payload)
+    markdown_path, _, _, _ = _write_outputs(args, payload)
     return markdown_path
 
 
@@ -772,6 +790,8 @@ def _render_console_summary(payload: dict[str, Any]) -> list[str]:
 
 def main(argv: Optional[list[str]] = None) -> None:
     args = parse_args(argv)
+    if args.report_pdf and not args.report:
+        raise ValueError("--report-pdf requires --report to be set to a Markdown path.")
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.model,
@@ -787,7 +807,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     )
 
     payload = build_report_payload(args, stats)
-    markdown_path, json_path, plot_path = _write_outputs(args, payload)
+    markdown_path, json_path, plot_path, pdf_path = _write_outputs(args, payload)
 
     for line in _render_console_summary(payload):
         print(line)
@@ -795,6 +815,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         print(f"Report written to: {markdown_path}")
     if plot_path:
         print(f"Distribution plot written to: {plot_path}")
+    if pdf_path:
+        print(f"PDF report written to: {pdf_path}")
     if json_path:
         print(f"JSON report written to: {json_path}")
 

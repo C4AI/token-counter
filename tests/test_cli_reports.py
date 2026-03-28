@@ -42,6 +42,7 @@ def make_args(**overrides) -> Namespace:
         "trust_remote_code": False,
         "report": "reports/token_count_report.md",
         "report_json": "reports/token_count_report.json",
+        "report_pdf": False,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -135,6 +136,7 @@ class TokenCounterReportTests(unittest.TestCase):
         self.assertNotIn("## Summary", markdown)
         self.assertNotIn("## Distribution\n", markdown)
         self.assertIn("| Documents processed | 5 |", markdown)
+        self.assertIn("| PDF report path | n/a |", markdown)
         self.assertIn("| Mean tokens / doc | 22,00 |", markdown)
         self.assertIn("| Median tokens / doc | 3,00 |", markdown)
         self.assertIn("| IQR tokens / doc | 2,00 |", markdown)
@@ -179,6 +181,15 @@ class TokenCounterReportTests(unittest.TestCase):
         self.assertIn("p75", distribution["percentiles"])
         self.assertIn("iqr_tokens_per_doc", distribution)
         self.assertEqual(distribution["plot"]["relative_path"], "out_distribution.png")
+        self.assertIsNone(written_payload["run_metadata"]["report_pdf_path"])
+
+    def test_build_report_payload_includes_pdf_path_when_enabled(self) -> None:
+        payload = cli.build_report_payload(
+            make_args(report="reports/out.md", report_json="", report_pdf=True),
+            make_stats_from_lengths([1, 2, 3], rows_seen=3),
+        )
+
+        self.assertEqual(payload["run_metadata"]["report_pdf_path"], "reports/out.pdf")
 
     @patch("token_counter.cli.tqdm", DummyProgress)
     def test_main_supports_json_output_max_docs_and_special_tokens(self) -> None:
@@ -242,15 +253,88 @@ class TokenCounterReportTests(unittest.TestCase):
                 patch("token_counter.cli.write_markdown_report", return_value=report_path) as markdown_writer,
                 patch("token_counter.cli.write_json_report", return_value=json_path) as json_writer,
                 patch("token_counter.cli._write_distribution_plot") as plot_writer,
+                patch("token_counter.cli.export_markdown_report_to_pdf") as pdf_writer,
             ):
-                written_markdown, written_json, written_plot = cli._write_outputs(args, payload)
+                written_markdown, written_json, written_plot, written_pdf = cli._write_outputs(args, payload)
 
             self.assertEqual(written_markdown, report_path)
             self.assertEqual(written_json, json_path)
             self.assertEqual(written_plot, report_path.parent / "out_distribution.png")
+            self.assertIsNone(written_pdf)
             plot_writer.assert_called_once_with(report_path.parent / "out_distribution.png", payload)
+            pdf_writer.assert_not_called()
             markdown_writer.assert_called_once()
             json_writer.assert_called_once()
+
+    def test_write_outputs_generates_pdf_when_flag_is_enabled(self) -> None:
+        payload = cli.build_report_payload(
+            make_args(report="reports/out.md", report_json="", report_pdf=True),
+            make_stats_from_lengths([1, 2, 3], rows_seen=3),
+        )
+
+        with TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "out.md"
+            pdf_path = report_path.with_suffix(".pdf")
+            args = make_args(report=str(report_path), report_json="", report_pdf=True)
+            payload["distribution_stats"]["plot"]["relative_path"] = "out_distribution.png"
+
+            with (
+                patch("token_counter.cli.write_markdown_report", return_value=report_path),
+                patch("token_counter.cli._write_distribution_plot"),
+                patch(
+                    "token_counter.cli.export_markdown_report_to_pdf",
+                    return_value=pdf_path,
+                ) as pdf_writer,
+            ):
+                written_markdown, written_json, written_plot, written_pdf = cli._write_outputs(args, payload)
+
+            self.assertEqual(written_markdown, report_path)
+            self.assertIsNone(written_json)
+            self.assertEqual(written_plot, report_path.parent / "out_distribution.png")
+            self.assertEqual(written_pdf, pdf_path)
+            pdf_writer.assert_called_once_with(report_path, pdf_path)
+
+    @patch("token_counter.cli.tqdm", DummyProgress)
+    def test_main_supports_pdf_output(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            markdown_path = Path(temp_dir) / "report.md"
+            pdf_path = markdown_path.with_suffix(".pdf")
+            stdout = io.StringIO()
+
+            with (
+                patch("token_counter.cli.AutoTokenizer.from_pretrained", return_value=FakeTokenizer()),
+                patch("token_counter.cli._load_stream", return_value=iter(["a", "aa"])),
+                patch("token_counter.cli._now_local", return_value=datetime.fromisoformat("2026-03-28T11:00:00-03:00")),
+                patch("token_counter.cli._write_distribution_plot"),
+                patch("token_counter.cli.write_markdown_report", return_value=markdown_path),
+                patch("token_counter.cli.export_markdown_report_to_pdf", return_value=pdf_path) as pdf_writer,
+                redirect_stdout(stdout),
+            ):
+                cli.main(
+                    [
+                        "--input",
+                        "data/sample.parquet",
+                        "--report",
+                        str(markdown_path),
+                        "--report-pdf",
+                    ]
+                )
+
+            output = stdout.getvalue()
+            pdf_writer.assert_called_once_with(markdown_path, pdf_path)
+            self.assertIn("PDF report written to:", output)
+
+    def test_main_rejects_pdf_without_markdown_report(self) -> None:
+        with self.assertRaisesRegex(ValueError, "--report-pdf requires --report"):
+            cli.main(
+                [
+                    "--input",
+                    "data/sample.parquet",
+                    "--report",
+                    "",
+                    "--report-pdf",
+                ]
+            )
 
 
 if __name__ == "__main__":
