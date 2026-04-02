@@ -11,10 +11,18 @@ dependencies = [
     "tqdm>=4.66.0",
     "transformers>=4.38.0",
     "sentencepiece>=0.1.99",
+    "matplotlib>=3.8.0",
+]
+
+[project.optional-dependencies]
+pdf = [
+    "markdown>=3.7",
+    "xhtml2pdf>=0.2.17",
 ]
 
 [project.scripts]
 token-counter = "token_counter.cli:main"
+token-counter-report-pdf = "token_counter.pdf_export:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

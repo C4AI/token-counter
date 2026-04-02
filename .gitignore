@@ -188,3 +188,4 @@ scripts/find_min_docs.py
 .cursorignore
 .cursorindexingignore
 data/one_token_docs.txt
+.DS_Store

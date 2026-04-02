@@ -1,9 +1,5 @@
 """
 CLI entrypoint for counting tokenizer tokens in JSONL or Parquet datasets.
-
-The tool streams datasets via `datasets.load_dataset(..., streaming=True)` so it
-can handle large files without loading everything into memory. Results are
-summarized into a Markdown report for later inspection.
 """
 
 from __future__ import annotations
@@ -11,50 +7,26 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-# Defaults to mirror the original script behavior.
+from token_counter.reporting import (
+    TokenCountStats,
+    build_report_payload,
+    build_run_metadata,
+    pdf_report_path,
+    render_console_summary,
+    write_outputs,
+)
+
 DEFAULT_MODEL = "Qwen/Qwen3-1.7B-Base"
 DEFAULT_FORMAT = "parquet"
 DEFAULT_FIELD = "text"
 DEFAULT_REPORT_PATH = "reports/token_count_report.md"
-
-
-@dataclass
-class TokenCountStats:
-    documents: int = 0
-    total_tokens: int = 0
-    min_tokens: Optional[int] = None
-    max_tokens: Optional[int] = None
-    wall_time: float = 0.0
-
-    @property
-    def average_tokens(self) -> float:
-        return self.total_tokens / self.documents if self.documents else 0.0
-
-    @property
-    def tokens_per_second(self) -> float:
-        return self.total_tokens / self.wall_time if self.wall_time > 0 else 0.0
-
-    @property
-    def docs_per_second(self) -> float:
-        return self.documents / self.wall_time if self.wall_time > 0 else 0.0
-
-
-def _format_spreadsheet_number(value: float) -> str:
-    """
-    Format numeric values for spreadsheet copy/paste with dot-thousands and comma-decimals.
-    Example: 41691152 -> "41.691.152,00"
-    """
-    formatted = f"{value:,.2f}"
-    formatted = formatted.replace(",", "_").replace(".", ",").replace("_", ".")
-    return formatted
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -103,19 +75,26 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=DEFAULT_REPORT_PATH,
         help=f"Path for Markdown report. Use empty string to skip. Default: {DEFAULT_REPORT_PATH}",
     )
+    parser.add_argument(
+        "--report-json",
+        default="",
+        help="Path for JSON report. Disabled by default.",
+    )
+    parser.add_argument(
+        "--report-pdf",
+        action="store_true",
+        help="Generate a PDF report next to the Markdown report, reusing the same base filename.",
+    )
     return parser.parse_args(argv)
 
 
-def _load_stream(input_path: str, data_format: str, field: str) -> Iterator[str]:
-    """
-    Stream records from the dataset, yielding the target field as text.
-    """
+def _load_stream(input_path: str, data_format: str, field: str) -> Iterator[Any]:
     data_format = data_format.lower()
     path = Path(input_path)
     if data_format not in {"jsonl", "parquet"}:
         raise ValueError(f"Unsupported format '{data_format}'. Use jsonl or parquet.")
 
-    if not input_path.startswith(("http://", "https://")) and not path.exists():
+    if not input_path.startswith(("http://", "https://", "hf://")) and not path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     loader = "json" if data_format == "jsonl" else "parquet"
@@ -125,80 +104,55 @@ def _load_stream(input_path: str, data_format: str, field: str) -> Iterator[str]
     for example in iterable:
         if field not in example:
             raise KeyError(f"Field '{field}' not found in record: keys={list(example.keys())}")
-        value = example[field]
-        if value is None:
-            continue
-        yield str(value)
+        yield example[field]
 
 
 def _count_tokens(
-    text_stream: Iterable[str],
+    text_stream: Iterable[Any],
     tokenizer,
     add_special_tokens: bool = False,
     max_docs: Optional[int] = None,
 ) -> TokenCountStats:
     stats = TokenCountStats()
-    start = time.time()
+    stats.started_at_epoch = time.time()
+    start = time.perf_counter()
 
-    progress = tqdm(text_stream, desc="Counting tokens", unit="docs", total=max_docs)
-    for idx, text in enumerate(progress, start=1):
-        encoded = tokenizer.encode(text, add_special_tokens=add_special_tokens)
-        length = len(encoded)
+    progress = tqdm(desc="Counting tokens", unit="docs", total=max_docs)
+    try:
+        for raw_value in text_stream:
+            stats.rows_seen += 1
 
-        stats.documents += 1
-        stats.total_tokens += length
-        stats.min_tokens = length if stats.min_tokens is None else min(stats.min_tokens, length)
-        stats.max_tokens = length if stats.max_tokens is None else max(stats.max_tokens, length)
+            if raw_value is None:
+                stats.null_field_rows += 1
+                continue
 
-        if max_docs is not None and idx >= max_docs:
-            break
+            if isinstance(raw_value, str):
+                text = raw_value
+            else:
+                stats.non_string_rows_coerced += 1
+                text = str(raw_value)
 
-    stats.wall_time = time.time() - start
+            if text == "":
+                stats.empty_text_rows += 1
+
+            token_length = len(tokenizer.encode(text, add_special_tokens=add_special_tokens))
+            stats.observe_document(text=text, token_length=token_length)
+            progress.update(1)
+
+            if max_docs is not None and stats.documents_processed >= max_docs:
+                break
+    finally:
+        progress.close()
+        stats.wall_time = time.perf_counter() - start
+        stats.completed_at_epoch = time.time()
+
     return stats
-
-
-def _write_report(args: argparse.Namespace, stats: TokenCountStats) -> Optional[Path]:
-    if not args.report:
-        return None
-
-    report_path = Path(args.report)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-
-    lines = [
-        "# Token Count Report",
-        "",
-        f"- Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"- Input: {args.input}",
-        f"- Format: {args.format}",
-        f"- Field: {args.field}",
-        f"- Model: {args.model}",
-        f"- Add special tokens: {bool(args.add_special_tokens)}",
-        f"- Max docs: {args.max_docs if args.max_docs is not None else 'All'}",
-        f"- Trust remote code: {bool(args.trust_remote_code)}",
-        "",
-        "## Summary",
-        "",
-        "| Metric | Value |",
-        "| --- | --- |",
-        f"| Documents processed | {_format_spreadsheet_number(stats.documents)} |",
-        f"| Total tokens | {_format_spreadsheet_number(stats.total_tokens)} |",
-        f"| Avg tokens / doc | {_format_spreadsheet_number(stats.average_tokens)} |",
-        f"| Min tokens / doc | {_format_spreadsheet_number(stats.min_tokens) if stats.min_tokens is not None else 'n/a'} |",
-        f"| Max tokens / doc | {_format_spreadsheet_number(stats.max_tokens) if stats.max_tokens is not None else 'n/a'} |",
-        "",
-        "## Performance",
-        "",
-        f"- Wall time (s): {_format_spreadsheet_number(stats.wall_time)}",
-        f"- Tokens per second: {_format_spreadsheet_number(stats.tokens_per_second)}",
-        f"- Docs per second: {_format_spreadsheet_number(stats.docs_per_second)}",
-    ]
-
-    report_path.write_text("\n".join(lines), encoding="utf-8")
-    return report_path
 
 
 def main(argv: Optional[list[str]] = None) -> None:
     args = parse_args(argv)
+    if args.report_pdf and not args.report:
+        raise ValueError("--report-pdf requires --report to be set to a Markdown path.")
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.model,
@@ -213,18 +167,38 @@ def main(argv: Optional[list[str]] = None) -> None:
         max_docs=args.max_docs,
     )
 
-    report_path = _write_report(args, stats)
+    report_path = args.report or None
+    report_json_path = args.report_json or None
+    report_pdf_path_value = (
+        str(pdf_report_path(Path(args.report))) if args.report_pdf and args.report else None
+    )
+    run_metadata = build_run_metadata(
+        input_value=args.input,
+        data_format=args.format,
+        field=args.field,
+        model=args.model,
+        add_special_tokens=args.add_special_tokens,
+        max_docs=args.max_docs,
+        trust_remote_code=args.trust_remote_code,
+        report_path=report_path,
+        report_json_path=report_json_path,
+        report_pdf_path=report_pdf_path_value,
+        started_at_epoch=stats.started_at_epoch,
+        completed_at_epoch=stats.completed_at_epoch,
+    )
+    payload = build_report_payload(run_metadata, stats)
+    markdown_path, json_path, plot_path, pdf_path = write_outputs(payload)
 
-    # Console summary
-    print(f"Documents processed: {stats.documents}")
-    print(f"Total tokens: {stats.total_tokens}")
-    print(f"Avg tokens/doc: {stats.average_tokens:.2f}")
-    print(f"Min tokens/doc: {stats.min_tokens if stats.min_tokens is not None else 'n/a'}")
-    print(f"Max tokens/doc: {stats.max_tokens if stats.max_tokens is not None else 'n/a'}")
-    print(f"Tokens/sec: {stats.tokens_per_second:.2f}")
-    print(f"Docs/sec: {stats.docs_per_second:.2f}")
-    if report_path:
-        print(f"Report written to: {report_path}")
+    for line in render_console_summary(payload):
+        print(line)
+    if markdown_path:
+        print(f"Report written to: {markdown_path}")
+    if plot_path:
+        print(f"Distribution plot written to: {plot_path}")
+    if pdf_path:
+        print(f"PDF report written to: {pdf_path}")
+    if json_path:
+        print(f"JSON report written to: {json_path}")
 
 
 if __name__ == "__main__":
