@@ -7,7 +7,7 @@ from __future__ import annotations
 import argparse
 from html import escape
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 from urllib.parse import unquote, urlparse
 
 try:
@@ -144,7 +144,7 @@ def _markdown_to_body_html(markdown_text: str) -> str:
     return markdown_lib.markdown(
         markdown_text,
         extensions=["tables", "fenced_code", "sane_lists"],
-        output_format="html",
+        output_format="html5",
     )
 
 
@@ -177,8 +177,8 @@ def _resolve_asset_uri(uri: str, base_dir: Path) -> str:
     return str((base_dir / unquote(uri)).resolve())
 
 
-def _make_link_callback(base_dir: Path) -> Callable[[str, Optional[str]], str]:
-    def resolve_link(uri: str, rel: Optional[str]) -> str:
+def _make_link_callback(base_dir: Path) -> Callable[[str, str | None], str]:
+    def resolve_link(uri: str, rel: str | None) -> str:
         _ = rel
         return _resolve_asset_uri(uri, base_dir)
 
@@ -187,9 +187,9 @@ def _make_link_callback(base_dir: Path) -> Callable[[str, Optional[str]], str]:
 
 def export_markdown_report_to_pdf(
     input_path: str | Path,
-    output_path: Optional[str | Path] = None,
+    output_path: str | Path | None = None,
     *,
-    title: Optional[str] = None,
+    title: str | None = None,
 ) -> Path:
     _require_pdf_dependencies()
 
@@ -210,23 +210,22 @@ def export_markdown_report_to_pdf(
     html_document = _build_html_document(document_title, body_html)
 
     assert pisa is not None
-    from io import BytesIO
-    
-    pdf_buffer = BytesIO()
-    pisa.CreatePDF(
-        html_document,
-        dest=pdf_buffer,
-        encoding="utf-8",
-        link_callback=_make_link_callback(source.parent),
-    )
-    
     with destination.open("wb") as output_file:
-        output_file.write(pdf_buffer.getvalue())
+        result = pisa.CreatePDF(
+            html_document,
+            dest=output_file,
+            encoding="utf-8",
+            link_callback=_make_link_callback(source.parent),
+        )
+
+    if result.err:
+        destination.unlink(missing_ok=True)
+        raise RuntimeError(f"Failed to render PDF from Markdown report: {source}")
 
     return destination
 
 
-def main(argv: Optional[list[str]] = None) -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
     output_path = export_markdown_report_to_pdf(
