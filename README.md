@@ -2,11 +2,20 @@
 
 CLI and runner utilities to stream datasets, count tokenizer tokens with a base model tokenizer (default: `Qwen/Qwen3-1.7B-Base`), and generate rich reports with distribution metrics.
 
+The terminal experience is powered by `rich`, with live progress, continuously updated counters, and a more legible final summary.
+
 ## Installation
 ```bash
 pip install -r requirements.txt
 pip install -e .
 ```
+
+For gated or private Hugging Face assets, place your token in a local `.env` file:
+```bash
+HF_TOKEN=hf_xxx
+```
+
+The CLI and the Hugging Face runner automatically load `HF_TOKEN` from `.env`, log in to the Hub, and reuse that token for `datasets` and `transformers`.
 
 For PDF export support only, you can install the optional extra:
 ```bash

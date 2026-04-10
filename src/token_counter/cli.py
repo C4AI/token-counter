@@ -11,17 +11,17 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
 from datasets import load_dataset
-from tqdm import tqdm
 from transformers import AutoTokenizer
 
+from token_counter.hf_auth import ensure_hf_auth
 from token_counter.reporting import (
     TokenCountStats,
     build_report_payload,
     build_run_metadata,
     pdf_report_path,
-    render_console_summary,
     write_outputs,
 )
+from token_counter.terminal_ui import CountingUI
 
 DEFAULT_MODEL = "Qwen/Qwen3-1.7B-Base"
 DEFAULT_FORMAT = "parquet"
@@ -88,7 +88,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _load_stream(input_path: str, data_format: str, field: str) -> Iterator[Any]:
+def _load_stream(
+    input_path: str,
+    data_format: str,
+    field: str,
+    hf_token: Optional[str] = None,
+) -> Iterator[Any]:
     data_format = data_format.lower()
     path = Path(input_path)
     if data_format not in {"jsonl", "parquet"}:
@@ -98,7 +103,14 @@ def _load_stream(input_path: str, data_format: str, field: str) -> Iterator[Any]
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     loader = "json" if data_format == "jsonl" else "parquet"
-    dataset = load_dataset(loader, data_files=input_path, streaming=True)
+    storage_options = {"token": hf_token} if hf_token else None
+    dataset = load_dataset(
+        loader,
+        data_files=input_path,
+        streaming=True,
+        token=hf_token,
+        storage_options=storage_options,
+    )
     iterable = dataset["train"]
 
     for example in iterable:
@@ -112,18 +124,19 @@ def _count_tokens(
     tokenizer,
     add_special_tokens: bool = False,
     max_docs: Optional[int] = None,
+    ui: Optional[CountingUI] = None,
 ) -> TokenCountStats:
     stats = TokenCountStats()
     stats.started_at_epoch = time.time()
     start = time.perf_counter()
-
-    progress = tqdm(desc="Counting tokens", unit="docs", total=max_docs)
     try:
         for raw_value in text_stream:
             stats.rows_seen += 1
 
             if raw_value is None:
                 stats.null_field_rows += 1
+                if ui is not None:
+                    ui.update(stats)
                 continue
 
             if isinstance(raw_value, str):
@@ -137,14 +150,16 @@ def _count_tokens(
 
             token_length = len(tokenizer.encode(text, add_special_tokens=add_special_tokens))
             stats.observe_document(text=text, token_length=token_length)
-            progress.update(1)
+            if ui is not None:
+                ui.update(stats)
 
             if max_docs is not None and stats.documents_processed >= max_docs:
                 break
     finally:
-        progress.close()
         stats.wall_time = time.perf_counter() - start
         stats.completed_at_epoch = time.time()
+        if ui is not None:
+            ui.update(stats, force=True)
 
     return stats
 
@@ -154,51 +169,74 @@ def main(argv: Optional[list[str]] = None) -> None:
     if args.report_pdf and not args.report:
         raise ValueError("--report-pdf requires --report to be set to a Markdown path.")
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model,
-        trust_remote_code=args.trust_remote_code,
-    )
-
-    text_stream = _load_stream(args.input, args.format, args.field)
-    stats = _count_tokens(
-        text_stream,
-        tokenizer=tokenizer,
-        add_special_tokens=args.add_special_tokens,
-        max_docs=args.max_docs,
-    )
-
     report_path = args.report or None
     report_json_path = args.report_json or None
     report_pdf_path_value = (
         str(pdf_report_path(Path(args.report))) if args.report_pdf and args.report else None
     )
-    run_metadata = build_run_metadata(
-        input_value=args.input,
-        data_format=args.format,
-        field=args.field,
+    ui = CountingUI(
+        title="Token Counter",
+        source_label="Input",
+        source_value=args.input,
         model=args.model,
-        add_special_tokens=args.add_special_tokens,
-        max_docs=args.max_docs,
-        trust_remote_code=args.trust_remote_code,
+        total_docs=args.max_docs,
         report_path=report_path,
-        report_json_path=report_json_path,
-        report_pdf_path=report_pdf_path_value,
-        started_at_epoch=stats.started_at_epoch,
-        completed_at_epoch=stats.completed_at_epoch,
+        json_path=report_json_path,
     )
-    payload = build_report_payload(run_metadata, stats)
-    markdown_path, json_path, plot_path, pdf_path = write_outputs(payload)
+    ui.start()
+    try:
+        ui.set_phase("Authenticating", "Checking HF_TOKEN from environment")
+        auth = ensure_hf_auth()
+        if auth.token:
+            ui.log(
+                f"Authenticated to Hugging Face with HF_TOKEN from {auth.source or 'environment'}",
+                style="green",
+            )
 
-    for line in render_console_summary(payload):
-        print(line)
-    if markdown_path:
-        print(f"Report written to: {markdown_path}")
-    if plot_path:
-        print(f"Distribution plot written to: {plot_path}")
-    if pdf_path:
-        print(f"PDF report written to: {pdf_path}")
-    if json_path:
-        print(f"JSON report written to: {json_path}")
+        ui.set_phase("Loading tokenizer", "Preparing tokenizer")
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.model,
+            trust_remote_code=args.trust_remote_code,
+            token=auth.token,
+        )
+
+        ui.set_phase("Streaming dataset", f"Reading {args.format} stream")
+        text_stream = _load_stream(args.input, args.format, args.field, hf_token=auth.token)
+        stats = _count_tokens(
+            text_stream,
+            tokenizer=tokenizer,
+            add_special_tokens=args.add_special_tokens,
+            max_docs=args.max_docs,
+            ui=ui,
+        )
+
+        ui.set_phase("Writing reports", "Persisting Markdown, JSON, and plots")
+        run_metadata = build_run_metadata(
+            input_value=args.input,
+            data_format=args.format,
+            field=args.field,
+            model=args.model,
+            add_special_tokens=args.add_special_tokens,
+            max_docs=args.max_docs,
+            trust_remote_code=args.trust_remote_code,
+            report_path=report_path,
+            report_json_path=report_json_path,
+            report_pdf_path=report_pdf_path_value,
+            started_at_epoch=stats.started_at_epoch,
+            completed_at_epoch=stats.completed_at_epoch,
+        )
+        payload = build_report_payload(run_metadata, stats)
+        markdown_path, json_path, plot_path, pdf_path = write_outputs(payload)
+    finally:
+        ui.stop()
+
+    ui.print_final_summary(
+        payload,
+        markdown_path=markdown_path,
+        json_path=json_path,
+        plot_path=plot_path,
+        pdf_path=pdf_path,
+    )
 
 
 if __name__ == "__main__":

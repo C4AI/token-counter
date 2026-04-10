@@ -545,6 +545,16 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
             f"| Trust remote code | {bool(run_metadata['trust_remote_code'])} |",
         ]
     )
+    if run_metadata.get("dataset_total_rows") is not None:
+        lines.append(f"| Dataset total rows | {format_integer(run_metadata['dataset_total_rows'])} |")
+    if run_metadata.get("dataset_rows_remaining") is not None:
+        lines.append(
+            f"| Dataset rows remaining | {format_integer(run_metadata['dataset_rows_remaining'])} |"
+        )
+    if run_metadata.get("dataset_completion_percent") is not None:
+        lines.append(
+            f"| Dataset completion | {format_decimal(run_metadata['dataset_completion_percent'])}% |"
+        )
 
     if run_metadata.get("checkpoint_path") is not None:
         lines.append(f"| Checkpoint JSON path | {run_metadata['checkpoint_path']} |")
@@ -612,6 +622,21 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
             f"| Null field rows | {format_integer(data_quality_stats['null_field_rows'])} |",
             f"| Empty text rows | {format_integer(data_quality_stats['empty_text_rows'])} |",
             f"| Non-string rows coerced | {format_integer(data_quality_stats['non_string_rows_coerced'])} |",
+        ]
+    )
+    if run_metadata.get("dataset_total_rows") is not None:
+        lines.append(f"| Dataset total rows | {format_integer(run_metadata['dataset_total_rows'])} |")
+    if run_metadata.get("dataset_rows_remaining") is not None:
+        lines.append(
+            f"| Dataset rows remaining | {format_integer(run_metadata['dataset_rows_remaining'])} |"
+        )
+    if run_metadata.get("dataset_completion_percent") is not None:
+        lines.append(
+            f"| Dataset completion | {format_decimal(run_metadata['dataset_completion_percent'])}% |"
+        )
+
+    lines.extend(
+        [
             "",
             "## Performance",
             "",
