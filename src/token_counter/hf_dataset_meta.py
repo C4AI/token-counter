@@ -83,11 +83,15 @@ def _resolve_from_builder(
     dataset_id: str,
     split: str,
     *,
+    config: Optional[str] = None,
+    revision: Optional[str] = None,
     token: Optional[str] = None,
     trust_remote_code: bool = False,
 ) -> tuple[Optional[int], Optional[str]]:
     builder = load_dataset_builder(
         dataset_id,
+        name=config,
+        revision=revision,
         token=token,
         trust_remote_code=trust_remote_code,
     )
@@ -105,17 +109,25 @@ def _resolve_from_dataset_infos(
     dataset_id: str,
     split: str,
     *,
+    config: Optional[str] = None,
+    revision: Optional[str] = None,
     token: Optional[str] = None,
     trust_remote_code: bool = False,
 ) -> tuple[Optional[int], Optional[str], Optional[str]]:
     infos = get_dataset_infos(
         dataset_id,
+        revision=revision,
         token=token,
         trust_remote_code=trust_remote_code,
     )
     matches: list[int] = []
     config_hits: list[str] = []
-    for config_name, info in infos.items():
+    selected_infos = (
+        {config: infos[config]}
+        if config is not None and config in infos
+        else infos
+    )
+    for config_name, info in selected_infos.items():
         num_examples = _split_num_examples_from_splits(getattr(info, "splits", None), split)
         if num_examples is None:
             continue
@@ -145,6 +157,8 @@ def resolve_dataset_split_size(
     dataset_id: str,
     split: str,
     *,
+    config: Optional[str] = None,
+    revision: Optional[str] = None,
     token: Optional[str] = None,
     trust_remote_code: bool = False,
 ) -> HFSplitSize:
@@ -162,6 +176,8 @@ def resolve_dataset_split_size(
         num_examples, source = _resolve_from_builder(
             dataset_id,
             split,
+            config=config,
+            revision=revision,
             token=token,
             trust_remote_code=trust_remote_code,
         )
@@ -175,6 +191,8 @@ def resolve_dataset_split_size(
         num_examples, source, note = _resolve_from_dataset_infos(
             dataset_id,
             split,
+            config=config,
+            revision=revision,
             token=token,
             trust_remote_code=trust_remote_code,
         )
@@ -185,7 +203,7 @@ def resolve_dataset_split_size(
             return HFSplitSize(num_examples=num_examples, source=source, note=note)
 
     try:
-        info = HfApi().dataset_info(dataset_id, token=token)
+        info = HfApi().dataset_info(dataset_id, revision=revision, token=token)
     except Exception as exc:
         errors.append(f"dataset card lookup failed: {type(exc).__name__}: {exc}")
         return HFSplitSize(

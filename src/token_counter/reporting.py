@@ -13,11 +13,9 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Optional
-
-import datasets
-import transformers
 
 from token_counter import __version__
 from token_counter.pdf_export import export_markdown_report_to_pdf
@@ -70,6 +68,13 @@ def format_decimal(value: Optional[float], decimals: int = 2) -> str:
         return "n/a"
     formatted = f"{value:,.{decimals}f}"
     return formatted.replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+def package_version(package_name: str) -> str:
+    try:
+        return importlib_metadata.version(package_name)
+    except importlib_metadata.PackageNotFoundError:
+        return "unknown"
 
 
 def distribution_plot_relative_path(report_path: Path) -> str:
@@ -425,8 +430,8 @@ def build_run_metadata(
         "report_pdf_path": report_pdf_path,
         "package_versions": {
             "token_counter": __version__,
-            "datasets": datasets.__version__,
-            "transformers": transformers.__version__,
+            "datasets": package_version("datasets"),
+            "transformers": package_version("transformers"),
             "python": platform.python_version(),
         },
     }
@@ -441,6 +446,7 @@ def build_report_payload(
     run_metadata: dict[str, Any],
     stats: TokenCountStats,
     status: str = "completed",
+    by_split: Optional[dict[str, TokenCountStats]] = None,
 ) -> dict[str, Any]:
     percentiles = stats.quantiles
     iqr = compute_iqr(percentiles)
@@ -448,7 +454,7 @@ def build_report_payload(
     if run_metadata.get("report_path"):
         plot_relative_path = distribution_plot_relative_path(Path(run_metadata["report_path"]))
 
-    return {
+    payload = {
         "schema_version": SCHEMA_VERSION,
         "status": status,
         "run_metadata": run_metadata,
@@ -507,20 +513,45 @@ def build_report_payload(
             "characters_per_second": stats.characters_per_second,
         },
     }
+    if by_split:
+        payload["by_split"] = {
+            split: {
+                "rows_seen": split_stats.rows_seen,
+                "documents_processed": split_stats.documents_processed,
+                "total_tokens": split_stats.total_tokens,
+                "avg_tokens_per_doc": split_stats.average_tokens,
+                "p95_tokens_per_doc": split_stats.quantiles["p95"],
+                "max_tokens_per_doc": split_stats.max_tokens,
+            }
+            for split, split_stats in by_split.items()
+        }
+    return payload
 
 
 def render_markdown_report(payload: dict[str, Any]) -> str:
     run_metadata = payload["run_metadata"]
+    summary_stats = payload["summary_stats"]
     distribution_stats = payload["distribution_stats"]
     data_quality_stats = payload["data_quality_stats"]
     performance_stats = payload["performance_stats"]
     plot_info = distribution_stats.get("plot") or {}
+    by_split = payload.get("by_split") or {}
 
     lines = [
         "# Token Count Report",
         "",
         f"- Status: {payload['status']}",
         f"- Schema version: {payload['schema_version']}",
+        "",
+        "## Summary",
+        "",
+        "| Metric | Value |",
+        "| --- | --- |",
+        f"| Total tokens | {format_integer(summary_stats['total_tokens'])} |",
+        f"| Documents processed | {format_integer(summary_stats['documents_processed'])} |",
+        f"| Rows seen | {format_integer(summary_stats['rows_seen'])} |",
+        f"| Total characters | {format_integer(summary_stats['total_characters'])} |",
+        f"| Avg tokens / doc | {format_decimal(summary_stats['avg_tokens_per_doc'])} |",
         "",
         "## Run Context",
         "",
@@ -533,18 +564,26 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
         f"| Format | {run_metadata['format']} |",
     ]
 
+    if run_metadata.get("dataset") is not None:
+        lines.append(f"| Dataset | {run_metadata['dataset']} |")
+    if run_metadata.get("config") is not None:
+        lines.append(f"| Config | {run_metadata['config']} |")
+    if run_metadata.get("revision") is not None:
+        lines.append(f"| Revision | {run_metadata['revision']} |")
+    if run_metadata.get("splits") is not None:
+        lines.append(f"| Splits | {', '.join(run_metadata['splits'])} |")
     if run_metadata.get("split") is not None:
         lines.append(f"| Split | {run_metadata['split']} |")
 
-    lines.extend(
-        [
-            f"| Field | {run_metadata['field']} |",
-            f"| Model | {run_metadata['model']} |",
-            f"| Add special tokens | {bool(run_metadata['add_special_tokens'])} |",
-            f"| Max docs | {run_metadata['max_docs'] if run_metadata['max_docs'] is not None else 'All'} |",
-            f"| Trust remote code | {bool(run_metadata['trust_remote_code'])} |",
-        ]
+    lines.append(f"| Field | {run_metadata['field']} |")
+    lines.append(f"| Model | {run_metadata['model']} |")
+    if run_metadata.get("batch_size") is not None:
+        lines.append(f"| Batch size | {run_metadata['batch_size']} |")
+    lines.append(f"| Add special tokens | {bool(run_metadata['add_special_tokens'])} |")
+    lines.append(
+        f"| Max docs | {run_metadata['max_docs'] if run_metadata['max_docs'] is not None else 'All'} |"
     )
+    lines.append(f"| Trust remote code | {bool(run_metadata['trust_remote_code'])} |")
     if run_metadata.get("dataset_total_rows") is not None:
         lines.append(f"| Dataset total rows | {format_integer(run_metadata['dataset_total_rows'])} |")
     if run_metadata.get("dataset_rows_remaining") is not None:
@@ -572,6 +611,33 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
             f"| transformers version | {run_metadata['package_versions']['transformers']} |",
             f"| Python version | {run_metadata['package_versions']['python']} |",
             "",
+        ]
+    )
+
+    if len(by_split) > 1:
+        lines.extend(
+            [
+                "## By Split",
+                "",
+                "| Split | Rows | Docs | Total tokens | Avg/doc | P95 | Max |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for split, split_stats in by_split.items():
+            lines.append(
+                "| "
+                f"{split} | "
+                f"{format_integer(split_stats['rows_seen'])} | "
+                f"{format_integer(split_stats['documents_processed'])} | "
+                f"{format_integer(split_stats['total_tokens'])} | "
+                f"{format_decimal(split_stats['avg_tokens_per_doc'])} | "
+                f"{format_decimal(split_stats['p95_tokens_per_doc'])} | "
+                f"{format_integer(split_stats['max_tokens_per_doc'])} |"
+            )
+        lines.append("")
+
+    lines.extend(
+        [
             "## Distribution Snapshot",
             "",
             "| Metric | Value |",

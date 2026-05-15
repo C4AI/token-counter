@@ -191,11 +191,10 @@ def export_markdown_report_to_pdf(
     *,
     title: str | None = None,
 ) -> Path:
-    _require_pdf_dependencies()
-
     source = Path(input_path).expanduser().resolve()
     if not source.exists():
         raise FileNotFoundError(f"Markdown report not found: {source}")
+    _require_pdf_dependencies()
 
     destination = (
         Path(output_path).expanduser().resolve()

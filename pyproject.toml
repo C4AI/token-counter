@@ -1,14 +1,13 @@
 [project]
 name = "token-counter"
 version = "0.1.0"
-description = "CLI tool to count tokenizer tokens in JSONL or Parquet datasets and produce markdown reports."
+description = "Universal CLI tool to count tokenizer tokens in datasets and produce reports."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Your Name" }]
 dependencies = [
     "datasets>=2.17.0",
-    "tqdm>=4.66.0",
     "transformers>=4.38.0",
     "sentencepiece>=0.1.99",
     "matplotlib>=3.8.0",
@@ -23,7 +22,6 @@ pdf = [
 
 [project.scripts]
 token-counter = "token_counter.cli:main"
-token-counter-report-pdf = "token_counter.pdf_export:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
