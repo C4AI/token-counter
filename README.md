@@ -31,27 +31,21 @@ pip install -e ".[pdf]"
 
 ## Quick Start
 
-Small local JSONL:
+Run a small public Hugging Face dataset:
 
 ```bash
-cat > /tmp/token-counter-small.jsonl <<'JSONL'
-{"id": 1, "text": "Ola mundo"}
-{"id": 2, "text": "Texto curto para contar tokens."}
-{"id": 3, "text": ""}
-{"id": 4, "text": null}
-{"id": 5, "text": 12345}
-JSONL
-
 token-counter \
-  --input /tmp/token-counter-small.jsonl \
-  --format jsonl \
+  --dataset stanfordnlp/imdb \
+  --config plain_text \
+  --split train \
   --field text \
   --model sshleifer/tiny-gpt2 \
+  --max-docs 100 \
   --report reports/example_small_dataset.md \
   --report-json reports/example_small_dataset.json
 ```
 
-Check the total:
+Check the total token count:
 
 ```bash
 jq '.summary_stats.total_tokens' reports/example_small_dataset.json
