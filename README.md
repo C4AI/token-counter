@@ -31,24 +31,18 @@ pip install -e ".[pdf]"
 
 ## Quick Start
 
-Run a small public Hugging Face dataset:
+Run a small sample from a Hugging Face dataset:
 
 ```bash
 token-counter \
-  --dataset stanfordnlp/imdb \
-  --config plain_text \
+  --dataset costadev00/gutenberg-project-tokenweaver-cpt-2048 \
+  --config default \
   --split train \
   --field text \
-  --model sshleifer/tiny-gpt2 \
+  --model Qwen/Qwen3-1.7B-Base \
   --max-docs 100 \
-  --report reports/example_small_dataset.md \
-  --report-json reports/example_small_dataset.json
-```
-
-Check the total token count:
-
-```bash
-jq '.summary_stats.total_tokens' reports/example_small_dataset.json
+  --report reports/gutenberg_sample.md \
+  --report-json reports/gutenberg_sample.json
 ```
 
 ## Common Commands
