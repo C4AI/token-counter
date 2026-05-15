@@ -1,61 +1,113 @@
 # Token Counter
 
-Universal CLI for counting tokenizer tokens in datasets and generating reports.
+Count tokenizer tokens in local files or Hugging Face datasets, then generate a
+Markdown/JSON report with the total token count and distribution insights.
 
-The main goal is to answer one question clearly: how many tokens are in this
-dataset for this tokenizer? The same run also produces useful distribution,
-quality, and performance insights.
+The primary output is always:
 
-## Installation
+- Markdown summary: `Total tokens`
+- JSON field: `summary_stats.total_tokens`
+- Terminal summary: `Total tokens`
+
+## Install
 
 ```bash
 pip install -r requirements.txt
 pip install -e .
 ```
 
-For gated or private Hugging Face assets, place your token in the environment or
+For private or gated Hugging Face datasets, set `HF_TOKEN` in the environment or
 in a local `.env` file:
 
 ```bash
 HF_TOKEN=hf_xxx
 ```
 
-PDF export support is optional:
+Optional PDF support:
 
 ```bash
 pip install -e ".[pdf]"
 ```
 
-## Usage
+## Quick Start
 
-Local or remote Parquet:
-
-```bash
-token-counter --input data/dataset.parquet --format parquet --field text
-```
-
-JSONL:
+Small local JSONL:
 
 ```bash
-token-counter --input data/dataset.jsonl --format jsonl --field text
+cat > /tmp/token-counter-small.jsonl <<'JSONL'
+{"id": 1, "text": "Ola mundo"}
+{"id": 2, "text": "Texto curto para contar tokens."}
+{"id": 3, "text": ""}
+{"id": 4, "text": null}
+{"id": 5, "text": 12345}
+JSONL
+
+token-counter \
+  --input /tmp/token-counter-small.jsonl \
+  --format jsonl \
+  --field text \
+  --model sshleifer/tiny-gpt2 \
+  --report reports/example_small_dataset.md \
+  --report-json reports/example_small_dataset.json
 ```
 
-Hugging Face `hf://` Parquet glob:
+Check the total:
+
+```bash
+jq '.summary_stats.total_tokens' reports/example_small_dataset.json
+```
+
+## Common Commands
+
+Single local Parquet:
 
 ```bash
 token-counter \
-  --input "hf://datasets/<org>/<dataset>@main/path/part-*.parquet" \
+  --input data/dataset.parquet \
   --format parquet \
   --field text
 ```
 
-Hugging Face dataset streaming:
+Multiple local Parquet shards:
+
+```bash
+token-counter \
+  --input "data/shards/*.parquet" \
+  --format parquet \
+  --field text
+```
+
+Use quotes around globs so the CLI receives the pattern.
+
+Remote or Hugging Face Parquet glob:
+
+```bash
+token-counter \
+  --input "hf://datasets/<org>/<dataset>@main/path/*.parquet" \
+  --format parquet \
+  --field text
+```
+
+Hugging Face dataset:
 
 ```bash
 token-counter \
   --dataset <org>/<dataset> \
   --split train \
   --field text
+```
+
+Hugging Face dataset with config/revision:
+
+```bash
+token-counter \
+  --dataset costadev00/gutenberg-project-tokenweaver-cpt-2048 \
+  --config default \
+  --split train \
+  --field text \
+  --model Qwen/Qwen3-1.7B-Base \
+  --report reports/gutenberg_project_tokenweaver_cpt_2048.md \
+  --report-json reports/gutenberg_project_tokenweaver_cpt_2048.json
 ```
 
 Multiple Hugging Face splits:
@@ -67,80 +119,102 @@ token-counter \
   --config default \
   --splits valid invalid \
   --field text_markdown \
-  --model Qwen/Qwen3-1.7B-Base
+  --model Qwen/Qwen3-1.7B-Base \
+  --report reports/br_legislation.md \
+  --report-json reports/br_legislation.json
 ```
 
-The module entrypoint is equivalent:
+The module form is equivalent:
 
 ```bash
 python -m token_counter.cli --dataset <org>/<dataset> --split train --field text
 ```
 
-## Reports
+## Reports And Resume
 
-By default, the CLI writes:
+By default, `token-counter` writes:
 
-- Markdown: `reports/token_count_report.md`
-- JSON/checkpoint: `reports/token_count_report.json`
-- Distribution plot next to the Markdown report
+- `reports/token_count_report.md`
+- `reports/token_count_report.json`
+- `reports/token_count_report_distribution.png`
 
-The Markdown report starts with a summary table that includes `Total tokens`.
-The JSON report stores the same value at `summary_stats.total_tokens`.
-
-Useful report flags:
+Choose output paths:
 
 ```bash
-token-counter --dataset <org>/<dataset> --report reports/count.md
-token-counter --dataset <org>/<dataset> --report-json reports/count.json
-token-counter --dataset <org>/<dataset> --report "" --report-json reports/count.json
-token-counter --dataset <org>/<dataset> --report-pdf
+token-counter \
+  --dataset <org>/<dataset> \
+  --field text \
+  --report reports/count.md \
+  --report-json reports/count.json
 ```
 
-For long runs, the JSON report is also the checkpoint file:
+Disable Markdown and write only JSON:
 
 ```bash
-token-counter --dataset <org>/<dataset> --report-json reports/count.json
-token-counter --dataset <org>/<dataset> --report-json reports/count.json --resume
+token-counter \
+  --dataset <org>/<dataset> \
+  --field text \
+  --report "" \
+  --report-json reports/count.json
 ```
 
-## Main Flags
+Resume from the JSON checkpoint:
 
-- `--input`: JSONL/Parquet path, URL, or `hf://` glob
-- `--dataset`: Hugging Face dataset id
-- `--format`: `jsonl` or `parquet` for `--input`
-- `--config`: Hugging Face dataset config/name
-- `--revision`: Hugging Face dataset revision
-- `--split`: one Hugging Face split, repeatable
-- `--splits`: multiple Hugging Face splits in one flag
-- `--field`: text field to tokenize, default `text`
-- `--model`: tokenizer model, default `Qwen/Qwen3-1.7B-Base`
-- `--batch-size`: documents per tokenizer batch, default `256`
-- `--max-docs`: stop after N processed documents
-- `--add-special-tokens`: include tokenizer special tokens
-- `--trust-remote-code`: allow custom tokenizer or dataset code
-- `--resume`: resume from `--report-json`
-- `--checkpoint-every`: checkpoint every N processed documents, default `10000`
-- `--report`: Markdown report path, empty string disables Markdown
-- `--report-json`: JSON report/checkpoint path, empty string disables JSON
-- `--report-pdf`: generate a PDF next to the Markdown report
+```bash
+token-counter \
+  --dataset <org>/<dataset> \
+  --field text \
+  --report-json reports/count.json \
+  --resume
+```
 
-## Output Shape
+Generate PDF:
+
+```bash
+token-counter \
+  --dataset <org>/<dataset> \
+  --field text \
+  --report reports/count.md \
+  --report-pdf
+```
+
+## Important Flags
+
+| Flag | Use |
+| --- | --- |
+| `--input` | Local path, URL, local glob, or `hf://` Parquet/JSONL input |
+| `--dataset` | Hugging Face dataset id |
+| `--format` | `jsonl` or `parquet` for `--input` |
+| `--field` | Text column to tokenize, default `text` |
+| `--model` | Tokenizer model, default `Qwen/Qwen3-1.7B-Base` |
+| `--batch-size` | Documents per tokenizer batch, default `256` |
+| `--max-docs` | Stop after N processed documents |
+| `--config` | Hugging Face dataset config |
+| `--revision` | Hugging Face dataset revision |
+| `--split` | One Hugging Face split, repeatable |
+| `--splits` | Multiple Hugging Face splits in one flag |
+| `--resume` | Resume from `--report-json` checkpoint |
+| `--report` | Markdown report path; `""` disables Markdown |
+| `--report-json` | JSON report/checkpoint path; `""` disables JSON |
+| `--report-pdf` | Generate a PDF next to the Markdown report |
+
+## Report Contents
+
+Markdown reports include:
+
+- Summary with `Total tokens`
+- Run context
+- Optional by-split table
+- Distribution snapshot: mean, median, IQR, P95, P99, stddev
+- Histogram plot and table
+- Data quality metrics
+- Performance metrics
 
 JSON reports include:
 
-- `schema_version`, `status`, `run_metadata`
 - `summary_stats.total_tokens`
 - `distribution_stats`
 - `data_quality_stats`
 - `performance_stats`
-- `by_split` when multiple Hugging Face splits are processed
+- `by_split` for multi-split runs
 - `checkpoint_state` for `--resume`
-
-Markdown reports include:
-
-- Summary with total tokens
-- Run context
-- Optional by-split table
-- Distribution snapshot and histogram
-- Data quality metrics
-- Performance metrics

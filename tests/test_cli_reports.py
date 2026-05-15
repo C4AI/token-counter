@@ -168,6 +168,21 @@ class TokenCounterReportTests(unittest.TestCase):
         self.assertEqual(values, ["ok"])
         loader.assert_called_once()
 
+    def test_local_glob_input_is_allowed_when_it_matches_files(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            shard = Path(temp_dir) / "part-0000.parquet"
+            shard.write_bytes(b"placeholder")
+            pattern = str(Path(temp_dir) / "*.parquet")
+
+            with patch(
+                "token_counter.cli.load_dataset",
+                return_value={"train": [{"text": "ok"}]},
+            ) as loader:
+                values = list(cli._iter_input_values(pattern, "parquet", "text"))
+
+        self.assertEqual(values, ["ok"])
+        loader.assert_called_once()
+
     def test_main_counts_input_and_prints_total_tokens(self) -> None:
         with TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "sample.jsonl"

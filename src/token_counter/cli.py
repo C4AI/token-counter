@@ -9,6 +9,7 @@ import json
 import signal
 import sys
 import time
+from glob import glob, has_magic
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional
 
@@ -173,8 +174,12 @@ def _iter_input_values(
     path = Path(input_path)
     if data_format not in {"jsonl", "parquet"}:
         raise ValueError(f"Unsupported format '{data_format}'. Use jsonl or parquet.")
-    if not input_path.startswith(("http://", "https://", "hf://")) and not path.exists():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
+    if not input_path.startswith(("http://", "https://", "hf://")):
+        if has_magic(input_path):
+            if not glob(input_path, recursive=True):
+                raise FileNotFoundError(f"Input glob did not match any files: {input_path}")
+        elif not path.exists():
+            raise FileNotFoundError(f"Input file not found: {input_path}")
 
     loader = "json" if data_format == "jsonl" else "parquet"
     storage_options = {"token": hf_token} if hf_token and input_path.startswith("hf://") else None
